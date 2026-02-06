@@ -168,10 +168,9 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(path, images, eval, n_views=3, llffhold=8):
+def readColmapSceneInfo(path, images):
     ply_path = os.path.join(path, "sparse/0/points3D.ply")
     bin_path = os.path.join(path, "sparse/0/points3D.bin")
-    ply_path = os.path.join(path, str(n_views) + "_views/dense/fused.ply")
 
     try:
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -198,18 +197,8 @@ def readColmapSceneInfo(path, images, eval, n_views=3, llffhold=8):
                              images_folder=os.path.join(path, reading_dir),  path=path, rgb_mapping=rgb_mapping)
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
-    if eval:
-        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
-        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
-    else:
-        train_cam_infos = cam_infos
-        test_cam_infos = []
-
-    if n_views > 0:
-        idx_sub = np.linspace(0, len(train_cam_infos)-1, n_views)
-        idx_sub = [round(i) for i in idx_sub]
-        train_cam_infos = [c for idx, c in enumerate(train_cam_infos) if idx in idx_sub]
-        assert len(train_cam_infos) == n_views
+    train_cam_infos = cam_infos
+    test_cam_infos = []
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
     scene_info = SceneInfo(point_cloud=pcd,
@@ -264,99 +253,5 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
             cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image, mask=None, K=K,
                             image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1], bounds=None))
-            
+
     return cam_infos
-
-def readNerfSyntheticInfo(path, white_background, eval, rand_pcd, extension=".png"):
-    print("Reading Training Transforms")
-    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
-    print("Reading Test Transforms")
-    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
-    
-    if eval:
-        train_cam_infos = [c for idx, c in enumerate(train_cam_infos) if idx in [2, 16, 26, 55, 73, 76, 86, 93]]
-        eval_cam_infos = [c for idx, c in enumerate(test_cam_infos)]
-        test_cam_infos = test_cam_infos
-    else:
-        test_cam_infos = []
-        eval_cam_infos = []
-
-    nerf_normalization = getNerfppNorm(train_cam_infos)
-
-    ply_path = os.path.join(path, "points3d.ply")
-    if rand_pcd:
-        print('Init random point cloud.')
-    if rand_pcd or not os.path.exists(ply_path):
-        # Since this data set has no colmap data, we start with random points
-        num_pts = 10_000
-        print(f"Generating random point cloud ({num_pts})...")
-        
-        # We create random points inside the bounds of the synthetic Blender scenes
-        xyz = np.random.random((num_pts, 3)) * 2 - 1
-        shs = np.random.random((num_pts, 3)) / 255.0
-        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
-
-        storePly(ply_path, xyz, SH2RGB(shs) * 255)
-    try:
-        pcd = fetchPly(ply_path)
-    except:
-        pcd = None
-
-    scene_info = SceneInfo(point_cloud=pcd,
-                           train_cameras=train_cam_infos,
-                           test_cameras=eval_cam_infos,
-                           # eval_cameras=eval_cam_infos,
-                           nerf_normalization=nerf_normalization,
-                           ply_path=ply_path)
-    return scene_info
-
-def readReplicaSceneInfo(path, images, eval, n_views=3, llffhold=8):
-    try:
-        cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
-        cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
-        cam_extrinsics = read_extrinsics_binary(cameras_extrinsic_file)
-        cam_intrinsics = read_intrinsics_binary(cameras_intrinsic_file)
-    except:
-        cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.txt")
-        cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.txt")
-        cam_extrinsics = read_extrinsics_text(cameras_extrinsic_file)
-        cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
-
-    try:
-        ply_path = os.path.join(path, "dense/dense.ply")
-        pcd = fetchPly(ply_path)
-    except:
-        ply_path = os.path.join(path, "points3d.ply")
-        num_pts = 10_000
-        print(f"Generating random point cloud ({num_pts})...")
-        xyz = np.random.random((num_pts, 3)) * 4 - 2
-        shs = np.random.random((num_pts, 3)) / 255.0
-        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
-        storePly(ply_path, xyz, SH2RGB(shs) * 255)
-        pcd = fetchPly(ply_path)
-
-    reading_dir = "images" if images == None else images
-    rgb_mapping = [f for f in sorted(glob.glob(os.path.join(path, reading_dir, '*')))
-                   if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')]
-    cam_extrinsics = {cam_extrinsics[k].name: cam_extrinsics[k] for k in cam_extrinsics}
-    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
-                             images_folder=os.path.join(path, reading_dir),  path=path, rgb_mapping=rgb_mapping)
-    cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
-
-    train_cam_infos = cam_infos[:2]
-    test_cam_infos = cam_infos[2:]
-
-    nerf_normalization = getNerfppNorm(train_cam_infos)
-    scene_info = SceneInfo(point_cloud=pcd,
-                           train_cameras=train_cam_infos,
-                           test_cameras=test_cam_infos,
-                           nerf_normalization=nerf_normalization,
-                           ply_path=ply_path)
-    return scene_info
-
-sceneLoadTypeCallbacks = {
-    "Colmap": readColmapSceneInfo,
-    "Blender" : readNerfSyntheticInfo,
-    "Replica" : readReplicaSceneInfo
-}
-
